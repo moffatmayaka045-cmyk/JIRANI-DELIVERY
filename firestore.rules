@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function admin() { return signedIn() && request.auth.token.admin == true; }
+    function self(uid) { return signedIn() && request.auth.uid == uid; }
+
+    match /users/{uid} {
+      allow read: if self(uid) || admin();
+      allow create: if self(uid)
+        && request.resource.data.role == 'customer'
+        && request.resource.data.walletBalanceKsh == 0
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'walletBalanceKsh', 'createdAt']);
+      allow update: if (self(uid) || admin())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'phone', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow read: if signedIn() && (
+        resource.data.customerId == request.auth.uid
+        || resource.data.runnerId == request.auth.uid
+        || admin()
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /walletLedger/{entryId} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || admin());
+      allow write: if false;
+    }
+
+    match /runnerPresence/{uid} {
+      allow read: if signedIn();
+      allow create, update: if self(uid) && request.auth.token.runnerApproved == true;
+      allow delete: if admin();
+    }
+
+    match /kycApplications/{uid} {
+      allow read: if self(uid) || admin();
+      allow create: if self(uid) && request.resource.data.status == 'pending';
+      allow update: if admin();
+      allow delete: if false;
+    }
+
+    match /chats/{orderId}/messages/{messageId} {
+      function participant() {
+        return signedIn() && (
+          get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid
+          || get(/databases/$(database)/documents/orders/$(orderId)).data.runnerId == request.auth.uid
+          || admin()
+        );
+      }
+      allow read: if participant();
+      allow create: if participant() && request.resource.data.senderId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
